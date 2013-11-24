@@ -8,6 +8,7 @@ import random
 import urllib2
 import json
 import math
+import copy
 
 import btcchinamock
 from key import *
@@ -28,10 +29,13 @@ ASK_CHECK_STEP_C = 0.0005
 ASK_AMOUNT_SLOPE = 7.333
 ASK_AMOUNT_FIX = 100
 
+OMIT_GAP_C = 0.0006
+PRICE_GAP_COMPARE_C = 0.01
+
 # wave check
-WAVE_SHRESHOLD_HORIZON_LIGHT = 2.5
-WAVE_SHRESHOLD_LIGHT_NORMAL = 4
-WAVE_SHRESHOLD_NORMAL_HEAVY = 5
+WAVE_SHRESHOLD_HORIZON_LIGHT = 80
+WAVE_SHRESHOLD_LIGHT_NORMAL = 250
+WAVE_SHRESHOLD_NORMAL_HEAVY = 800
 WAVE_LEVEL_HORIZON = 1
 WAVE_LEVEL_LIGHT = 2
 WAVE_LEVEL_NORMAL = 3
@@ -42,20 +46,24 @@ NORMAL_PRICE_FIX_C = 1.001
 HEAVY_PRICE_FIX_C = 1
 
 STATUS_LOOK = 1
-STATUS_BUYING = 2
-STATUS_BUY_PART = 3
-STATUS_BUY_FINISH = 4
-STATUS_SELLING = 5
+STATUS_START_BUY = 2
+STATUS_BUYING = 3
+STATUS_BUY_PART = 4
+STATUS_BUY_FINISH = 5
+STATUS_SELLING = 6
+
+ticker_cache = {'pp':[], 't':0, 'tt':[]}
+headers = {'User-Agent': 'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'}
 
 def run():
 
 	status = STATUS_LOOK
 
-	while True:  # notice: should be while
+	while True:
 		bc = btcchinamock.BTCChinaMock(access_key,secret_key)
 
 		try:
-			while True:  # notice: should be while
+			while True:
 				if (status == STATUS_LOOK):
 					print
 					# check network
@@ -67,22 +75,24 @@ def run():
 						time.sleep(3)
 						continue
 					# check market
+					print_cny(bc)
 					price_check = check_price(market_depth) # order is important!
 					depth_check = check_depth(market_depth) #
 					print 'price check:', price_check
 					print 'depth check:', depth_check
 					if price_check and depth_check:
-						print '*********** start buy *************'
-						try:
-							buy_price = market_depth['ask'][0]['price'] * BUY_PRICE_C
-							bc.buy(buy_price, BUT_BTC_NUMBER);
-							status = STATUS_BUYING
-						except:
-							print 'xxxxxxxxxx buy error xxxxxxxxxxxxx'
-
-					if status == STATUS_LOOK:
+						status = STATUS_START_BUY
+					else:
 						time.sleep(3)
-
+				elif status == STATUS_START_BUY:
+					print '*********** start buy *************'
+					try:
+						buy_price = market_depth['ask'][0]['price'] * BUY_PRICE_C
+						bc.buy(buy_price, BUT_BTC_NUMBER);
+						status = STATUS_BUYING
+						print 'buy for', buy_price
+					except:
+						print 'xxxxxxxxxx buy error xxxxxxxxxxxxx'
 				elif (status == STATUS_BUYING):
 					cancel_order_if_not_deal(bc)
 					(status, btc_amount) = get_status_after_buy(bc)
@@ -92,6 +102,7 @@ def run():
 					while True:
 						try:
 							if bc.sell(buy_price * SELL_PRICE_C, btc_amount):
+								print 'sell for', buy_price * SELL_PRICE_C
 								break
 						except Exception, e:
 							print 'xxxxxxxxxxxxx sell error xxxxxxxxxxxxxx'
@@ -100,14 +111,20 @@ def run():
 				elif (status == STATUS_SELLING):
 					status = get_status_after_sell(bc)
 					if status == STATUS_LOOK:
-						cny = bc.get_account_info()['balance']['cny']['amount']
 						print '*************** sell succeed ***************'
-						print 'after sell, cny =', cny
+						print_cny(bc)
+					else:
+						print 'xxxxxxxxxx continue selling xxxxxxxxxxx'
+						time.sleep(3)
 				else:
 					raise Exception('status error')
 		except Exception, e:
 			print 'exception: ', e
 			time.sleep(1)
+
+def print_cny(bc):
+	cny = bc.get_account_info()['balance']['cny']['amount']
+	print 'cny =', cny
 
 def get_status_after_sell(bc):
 	if len(bc.get_orders()['order']) == 0:
@@ -130,7 +147,7 @@ def cancel_order_if_not_deal(bc):
 				try:
 					bc.cancel(order['id'])
 					if __debug__:
-						print 'cancel order:', id
+						print 'cancel order:', order['id']
 					break
 				except:
 					print 'xxxxxxxxx cancel order fail xxxxxxxxx'
@@ -167,25 +184,28 @@ def check_bid_and_ask2(market_depth):
 		else:
 			i = i + 1
 	# compare amount
-	bids.insert(0, {'amount':0, 'price':asks[0]['price']})
+	askp0 = asks[0]['price']
 	bid_amount = 0;
 	bid_price_gap = 0;
 	bid_index = 1;
 	ask_amount = 0;
 	ask_price_gap = 0;
 	ask_index = 1;
-	while bid_index < len(bids):
-		bid_price_gap = bid_price_gap + bids[bid_index - 1]['price'] - bids[bid_index]['price']
+	while bid_index < len(bids) and bid_price_gap < askp0 * PRICE_GAP_COMPARE_C:
+		bid_price_gap = askp0 - bids[bid_index]['price']
 		bid_amount = bid_amount + bids[bid_index]['amount']
 		bid_index = bid_index + 1;
 		while ask_price_gap < bid_price_gap and ask_index < len(asks):
-			ask_price_gap = ask_price_gap + asks[ask_index]['price'] - asks[ask_index - 1]['price']
+			ask_price_gap = asks[ask_index]['price'] - askp0
 			ask_amount = ask_amount + asks[ask_index]['amount']
 			ask_index = ask_index + 1
 		c = 1.01 - 0.0002 * bid_index
-		if not bid_amount > ask_amount * c:
+		if (bid_price_gap > askp0 * OMIT_GAP_C) and (bid_amount/bid_price_gap < ask_amount/ask_price_gap * c):
+			if __debug__:
+				print 'price check fail:'
+				print '','',bids[bid_index]['price'], bid_amount, bid_price_gap
+				print '','',asks[ask_index]['price'], ask_amount, ask_price_gap
 			return False
-	del bids[0]
 	return True
 
 def check_bid(first_price, bids):
@@ -280,30 +300,55 @@ def check_price(market):
 	return True
 
 def get_ticker_history(url):
-	headers = {'User-Agent': 'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'}
 	req = urllib2.Request(url, headers=headers)
 	content = urllib2.urlopen(req).read()
 	ticker_hist = json.loads(content)
 
+	global ticker_cache
+	if ticker_cache['t'] == ticker_hist['t']:
+		get_update_data(ticker_cache)
+		ticker_hist = copy.deepcopy(ticker_cache)
+	else:
+		calc_time(ticker_hist)
+		get_update_data(ticker_hist)
+		ticker_cache = copy.deepcopy(ticker_hist)
+	
 	pp = ticker_hist['pp']
 	t = ticker_hist['t']
 	tt = ticker_hist['tt']
 	size = len(pp)
 	pp = pp[size//2 : ]
-	for i in range(0, size//2):
-		t = t + tt[i]
+	t = tt[size//2 - 1]
 	tt = tt[size//2 : ]
 	ticker_hist['pp'] = pp
 	ticker_hist['t'] = t
 	ticker_hist['tt'] = tt
 
 	return ticker_hist
-	
+
+def calc_time(ticker):
+	t = ticker['t']
+	tt = ticker['tt']
+	tt[0] = t + tt[0]
+	for i in range(1, len(tt)):
+		tt[i] = tt[i] + tt[i-1]
+
+def get_update_data(ticker):
+	url = 'http://mm.btc123.com/data/getmmJSON.php?type=mmTicUpd_btcchina&s=' + str(random.random())
+	req = urllib2.Request(url, headers = headers)
+	content = urllib2.urlopen(req).read()
+	new_ticker = json.loads(content)
+	if ticker['tt'][-1] == new_ticker['timestamp']:
+		ticker['pp'][-1] = new_ticker['last']
+	elif ticker['tt'][-1] < new_ticker['timestamp']:
+		ticker['pp'].append(new_ticker['last'])
+		ticker['tt'].append(new_ticker['timestamp'])
+
 def get_wave_level(ticker_hist, ave_price):
 	pp = ticker_hist['pp']
 	wave_point = 0
 	for i in range(0, len(pp)):
-		wave_point = wave_point + abs(pp[i] - pp[i-1]) / ave_price * i
+		wave_point = wave_point + abs(pp[i] - pp[i-1]) / ave_price * i * i
 	if wave_point > WAVE_SHRESHOLD_NORMAL_HEAVY:
 		wave_level = WAVE_LEVEL_HEAVY
 	elif wave_point > WAVE_SHRESHOLD_LIGHT_NORMAL:
@@ -313,7 +358,9 @@ def get_wave_level(ticker_hist, ave_price):
 	else:
 		wave_level = WAVE_LEVEL_HORIZON
 	last_pp = pp[-30 : ]
-	if max(last_pp)-min(last_pp) > pp[0] * 0.03:
+	if __debug__:
+		print 'check terrible:', max(last_pp), min(last_pp)
+	if max(last_pp)-min(last_pp) > ave_price * 0.03:
 		wave_levvel = WAVE_LEVEL_TERRIBLE
 	if __debug__:
 		print 'wave point:', wave_point

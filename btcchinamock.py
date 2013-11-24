@@ -12,7 +12,7 @@ class BTCChinaMock(BTCChina):
 		self.cny_amount = 0
 
 	def get_orders(self):
-		orders = BTCChina.get_market_depth(1)['market_depth']
+		orders = BTCChina.get_market_depth(self, 1)['market_depth']
 		bid_price = orders['bid'][0]['price']
 		ask_price = orders['ask'][0]['price']
 		i = 0
@@ -23,13 +23,15 @@ class BTCChinaMock(BTCChina):
 					self.btc_amount = self.btc_amount + order['amount']
 					self.cny_amount = self.cny_amount - order['price'] * order['amount']
 					del self.orders[i]
+					print 'buy success, last ask:', ask_price
 				else:
 					i = i + 1
 			else:
-				if bid_price <= order['price']:
+				if bid_price >= order['price']:
 					self.btc_amount = self.btc_amount - order['amount']
 					self.cny_amount = self.cny_amount + order['price'] * order['amount']
-					del self.order[i]
+					del self.orders[i]
+					print 'sell success, last bid:', bid_price
 				else:
 					i = i + 1
 		return {'order': self.orders}

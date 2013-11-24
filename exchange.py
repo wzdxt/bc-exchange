@@ -55,12 +55,13 @@ STATUS_BUY_FINISH = 5
 STATUS_SELLING = 6
 
 ticker_cache = {'pp':[], 't':0, 'tt':[]}
-headers = {'User-Agent': 'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'}
+headers = {'User-Agent': 'Mozilla/4.0 (Windows; U; Windows NT 5.0; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'}
 
 def run():
 
 	status = STATUS_LOOK
 
+	exception_sleep_time = 1
 	while True:
 		bc = btcchinamock.BTCChinaMock(access_key,secret_key)
 
@@ -76,16 +77,18 @@ def run():
 						print 'xxxxxxxxxxxx bad network xxxxxxxxxxxxxx'
 						time.sleep(3)
 						continue
+					if market_depth is None:
+						raise Exception('get_market_depth return None')
 					# check market
 					print_cny(bc)
 					price_check = check_price(market_depth) # order is important!
 					depth_check = check_depth(market_depth) #
 					print 'price check:', price_check, 'less is good'
 					print 'depth check:', depth_check, 'larger is good'
-					if (price_check[0] and depth_check[1] > 1) or(price_check[1]/depth_check[1]**2 < 0.0001):
+					if (price_check[0] and depth_check[1] > 1) or(price_check[1]/depth_check[1] < 0.0001):
 						status = STATUS_START_BUY
 					else:
-						time.sleep(3)
+						time.sleep(5)
 				elif status == STATUS_START_BUY:
 					print '*********** start buy *************'
 					try:
@@ -117,12 +120,14 @@ def run():
 						print_cny(bc)
 					else:
 						print 'xxxxxxxxxx continue selling xxxxxxxxxxx'
-						time.sleep(3)
+						time.sleep(5)
 				else:
 					raise Exception('status error')
+			exception_sleep_time = 1
 		except Exception, e:
 			print 'exception: ', e
-			time.sleep(1)
+			time.sleep(exception_sleep_time)
+			exception_sleep_time = exception_sleep_time + 2
 
 def print_cny(bc):
 	cny = bc.get_account_info()['balance']['cny']['amount']
@@ -317,6 +322,8 @@ def check_price(market):
 				print 'price evaluation value:', last_price / (ave_price * HEAVY_PRICE_FIX_C)
 			ret = False
 			evaluation = last_price / (ave_price * HEAVY_PRICE_FIX_C) - 1
+	else:
+		raise Exception('unknown wave level', wave_level)
 	return (ret, evaluation)
 
 def get_ticker_history(url):
@@ -391,9 +398,13 @@ def is_raise_up(ticker_hist, ave_price):
 	pp = ticker_hist['pp']
 	p1 = pp[-1]
 	p2 = sum(pp[-6 : -1]) / 5
-	ret = p1 - p2 > ave_price * RAISE_UP_C
+	p3 = sum(pp[-10 : -6]) / 5
+	if (p1 - p2 > ave_price * RAISE_UP_C) or (p1 - p2 > ave_price * RAISE_UP_C/2 and p1 - p3 > ave_price * RAISE_UP_C):
+		ret = True
+	else:
+		ret = False
 	if not ret and __debug__:
-		print 'not raise up:', p1, p2, ave_price * 0.0006
+		print 'not raise up:', p1, p2, p3, ave_price * RAISE_UP_C
 	return ret
 
 def get_ave_price(ticker_hist):

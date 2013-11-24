@@ -55,7 +55,7 @@ class BTCChina():
  
         # must use b64 encode        
         auth_string='Basic '+base64.b64encode(self.access_key+':'+pd_hash)
-        headers={'Authorization':auth_string,'Json-Rpc-Tonce':tonce}
+        headers={'Authorization':auth_string,'Json-Rpc-Tonce':tonce, 'User-Agent': 'Mozilla/4.0 (Windows; U; Windows NT 5.0; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'}
  
         #post_data dictionary passed as JSON        
         self.conn.request("POST",'/api_trade_v1.php',json.dumps(post_data),headers)

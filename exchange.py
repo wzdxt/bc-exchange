@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/d/python27/python
 # -*- coding: utf-8 -*-
 
 from __future__ import division
@@ -17,10 +17,6 @@ MARKET_SIZE = 200
 
 BUT_BTC_NUMBER = 0.1
 
-# order
-BUY_PRICE_C = 1.00001
-SELL_PRICE_C = 1.001
-
 # amount check
 BID_CHECK_STEP_C = -0.0005
 BID_AMOUNT_SLOPE = -7.333
@@ -29,7 +25,7 @@ ASK_CHECK_STEP_C = 0.0005
 ASK_AMOUNT_SLOPE = 7.333
 ASK_AMOUNT_FIX = 100
 
-OMIT_GAP_C = 0.001
+OMIT_GAP_C = 0.0005
 PRICE_GAP_COMPARE_C = 0.01
 
 # wave check
@@ -41,6 +37,7 @@ WAVE_LEVEL_LIGHT = 2
 WAVE_LEVEL_NORMAL = 3
 WAVE_LEVEL_HEAVY = 4
 WAVE_LEVEL_TERRIBLE = 5
+HORIZON_PRICE_FIX_C = 0.9995
 LIGHT_PRICE_FIX_C = 0.999
 NORMAL_PRICE_FIX_C = 1.001
 HEAVY_PRICE_FIX_C = 1
@@ -54,6 +51,15 @@ STATUS_BUY_PART = 4
 STATUS_BUY_FINISH = 5
 STATUS_SELLING = 6
 
+# order
+BUY_PRICE_C = 1.000004
+SELL_PRICE_C = {
+		WAVE_LEVEL_HORIZON : 1.0001,
+		WAVE_LEVEL_LIGHT : 1.0002,
+		WAVE_LEVEL_NORMAL : 1.0003,
+		WAVE_LEVEL_HEAVY : 1.0005,
+		}
+
 ticker_cache = {'pp':[], 't':0, 'tt':[]}
 headers = {'User-Agent': 'Mozilla/4.0 (Windows; U; Windows NT 5.0; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'}
 
@@ -62,8 +68,11 @@ def run():
 	status = STATUS_LOOK
 
 	exception_sleep_time = 1
+	look_sleep_time = 2
 	while True:
 		bc = btcchinamock.BTCChinaMock(access_key,secret_key)
+		if status == STATUS_START_BUY:
+			status = STATUS_LOOK
 
 		try:
 			while True:
@@ -81,14 +90,16 @@ def run():
 						raise Exception('get_market_depth return None')
 					# check market
 					print_cny(bc)
-					price_check = check_price(market_depth) # order is important!
-					depth_check = check_depth(market_depth) #
+					(price_check, wave_level) = check_price(market_depth) # order is important!
+					depth_check = check_depth(market_depth)               #
 					print 'price check:', price_check, 'less is good'
 					print 'depth check:', depth_check, 'larger is good'
 					if (price_check[0] and depth_check[1] > 1) or(price_check[1]/depth_check[1] < 0.0001):
 						status = STATUS_START_BUY
+						look_sleep_time = 2
 					else:
-						time.sleep(5)
+						time.sleep(look_sleep_time)
+						look_sleep_time = math.sqrt(look_sleep_time/10) * 10
 				elif status == STATUS_START_BUY:
 					print '*********** start buy *************'
 					try:
@@ -106,8 +117,11 @@ def run():
 				elif (status == STATUS_BUY_FINISH):
 					while True:
 						try:
-							if bc.sell(buy_price * SELL_PRICE_C, btc_amount):
-								print 'sell for', buy_price * SELL_PRICE_C
+							sell_price = buy_price * SELL_PRICE_C[wave_level]
+							if not price_check[0]:
+								sell_price = max(buy_price + 0.1, sell_price * (1/(1 + price_check[1]/10)))
+							if bc.sell(sell_price, btc_amount):
+								print 'sell for', sell_price
 								break
 						except Exception, e:
 							print 'xxxxxxxxxxxxx sell error xxxxxxxxxxxxxx'
@@ -118,9 +132,11 @@ def run():
 					if status == STATUS_LOOK:
 						print '*************** sell succeed ***************'
 						print_cny(bc)
+						look_sleep_time = 2
 					else:
-						print 'xxxxxxxxxx continue selling xxxxxxxxxxx'
-						time.sleep(5)
+						print 'xxxxxxxx continue selling %r xxxxxxxxx' % sell_price
+						time.sleep(look_sleep_time)
+						look_sleep_time = math.sqrt(look_sleep_time/10) * 10
 				else:
 					raise Exception('status error')
 			exception_sleep_time = 1
@@ -131,12 +147,16 @@ def run():
 
 def print_cny(bc):
 	cny = bc.get_account_info()['balance']['cny']['amount']
-	print 'cny =', cny
+	print '[%s]cny =%r' % (time.strftime('%H:%M:%S', time.localtime(time.time())), cny)
 
 def get_status_after_sell(bc):
-	if len(bc.get_orders()['order']) == 0:
-		return STATUS_LOOK
-	else:
+	try:
+		if len(bc.get_orders()['order']) == 0:
+			return STATUS_LOOK
+		else:
+			return STATUS_SELLING
+	except Exception, e:
+		print e
 		return STATUS_SELLING
 
 def get_status_after_buy(bc):
@@ -291,40 +311,43 @@ def check_price(market):
 	if not raise_up:
 		if __debug__:
 			print 'price check fail: not raise up'
-		return (False, evaluation)
+		return ((False, 100000), wave_level)
 
 	if wave_level == WAVE_LEVEL_HORIZON:
-		if __debug__:
-			print 'price check fail: horizon wave'
+		evaluation = last_price / (ave_price * HORIZON_PRICE_FIX_C) - 1
+		if last_price > ave_price * HORIZON_PRICE_FIX_C:
+			if __debug__:
+				print 'horizon wave price check fail: ', last_price, '>', ave_price, '*', HORIZON_PRICE_FIX_C
+				print 'price evaluation value:', last_price / (ave_price * HORIZON_PRICE_FIX_C)
 		ret = False
 	elif wave_level == WAVE_LEVEL_TERRIBLE:
 		if __debug__:
 			print 'price check fail: terrible wave'
 		ret = False
 	elif wave_level == WAVE_LEVEL_LIGHT:
+		evaluation = last_price / (ave_price * LIGHT_PRICE_FIX_C) - 1
 		if last_price > ave_price * LIGHT_PRICE_FIX_C:
 			if __debug__:
 				print 'light wave price check fail: ', last_price, '>', ave_price, '*', LIGHT_PRICE_FIX_C
 				print 'price evaluation value:', last_price / (ave_price * LIGHT_PRICE_FIX_C)
 			ret = False
-			evaluation = last_price / (ave_price * LIGHT_PRICE_FIX_C) - 1
 	elif wave_level == WAVE_LEVEL_NORMAL:
+		evaluation = last_price / (ave_price * NORMAL_PRICE_FIX_C) - 1
 		if last_price > ave_price * NORMAL_PRICE_FIX_C:
 			if __debug__:
 				print 'normal wave price check fail: ', last_price, '>', ave_price, '*', NORMAL_PRICE_FIX_C
 				print 'price evaluation value:', last_price / (ave_price * NORMAL_PRICE_FIX_C)
 			ret = False
-			evaluation = last_price / (ave_price * NORMAL_PRICE_FIX_C) - 1
 	elif wave_level == WAVE_LEVEL_HEAVY:
+		evaluation = last_price / (ave_price * HEAVY_PRICE_FIX_C) - 1
 		if last_price > ave_price * HEAVY_PRICE_FIX_C:
 			if __debug__:
 				print 'heavy wave price check fail: ', last_price, '>', ave_price, '*', HEAVY_PRICE_FIX_C
 				print 'price evaluation value:', last_price / (ave_price * HEAVY_PRICE_FIX_C)
 			ret = False
-			evaluation = last_price / (ave_price * HEAVY_PRICE_FIX_C) - 1
 	else:
 		raise Exception('unknown wave level', wave_level)
-	return (ret, evaluation)
+	return ((ret, evaluation), wave_level)
 
 def get_ticker_history(url):
 	req = urllib2.Request(url, headers=headers)
@@ -375,7 +398,8 @@ def get_wave_level(ticker_hist, ave_price):
 	pp = ticker_hist['pp']
 	wave_point = 0
 	for i in range(5, len(pp)):
-		wave_point = wave_point + abs(pp[i] - pp[i-5]) / 5 / ave_price * i**2
+		r = random.randint(3,5)
+		wave_point = wave_point + abs(pp[i] - pp[i-r]) / r / ave_price * i**2
 	if wave_point > WAVE_SHRESHOLD_NORMAL_HEAVY:
 		wave_level = WAVE_LEVEL_HEAVY
 	elif wave_point > WAVE_SHRESHOLD_LIGHT_NORMAL:
@@ -397,8 +421,8 @@ def get_wave_level(ticker_hist, ave_price):
 def is_raise_up(ticker_hist, ave_price):
 	pp = ticker_hist['pp']
 	p1 = pp[-1]
-	p2 = sum(pp[-6 : -1]) / 5
-	p3 = sum(pp[-10 : -6]) / 5
+	p2 = sum(pp[-4 : -1]) / 5
+	p3 = sum(pp[-7 : -4]) / 5
 	if (p1 - p2 > ave_price * RAISE_UP_C) or (p1 - p2 > ave_price * RAISE_UP_C/2 and p1 - p3 > ave_price * RAISE_UP_C):
 		ret = True
 	else:
@@ -409,10 +433,7 @@ def is_raise_up(ticker_hist, ave_price):
 
 def get_ave_price(ticker_hist):
 	pp = ticker_hist['pp']
-	count = 0
-	for price in pp:
-		count = count + price
-	ret = count/len(pp)
+	ret = sum(pp)/len(pp)
 	if __debug__:
 		print 'ave price:', ret
 	return ret

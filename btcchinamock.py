@@ -1,5 +1,9 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+
+import random
+import urllib2
+import json
  
 from btcchina import BTCChina
 
@@ -10,11 +14,20 @@ class BTCChinaMock(BTCChina):
 		self.order_id = 1
 		self.btc_amount = 0
 		self.cny_amount = 0
+		self.headers = {'User-Agent': 'Mozilla/4.0 (Windows; U; Windows NT 5.0; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'}
 
 	def get_orders(self):
-		orders = BTCChina.get_market_depth(self, 1)['market_depth']
-		bid_price = orders['bid'][0]['price']
-		ask_price = orders['ask'][0]['price']
+		url = 'http://mm.btc123.com/data/getmmJSON.php?type=mmTicUpd_btcchina&s=' + str(random.random())
+		req = urllib2.Request(url, headers = self.headers)
+		content = urllib2.urlopen(req).read()
+		new_ticker = json.loads(content)
+
+		#orders = BTCChina.get_market_depth(self, 1)['market_depth']
+		#bid_price = orders['bid'][0]['price']
+		#ask_price = orders['ask'][0]['price']
+
+		bid_price = new_ticker['last']
+		ask_price = new_ticker['last']
 		i = 0
 		while i < len(self.orders):
 			order = self.orders[i]
